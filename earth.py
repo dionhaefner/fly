@@ -1,3 +1,4 @@
+
 # -----------------------------------------------------------------------------
 # Copyright (c) 2009-2016 Nicolas P. Rougier. All rights reserved.
 # Distributed under the (new) BSD License.
@@ -14,17 +15,30 @@ from glumpy.graphics.text import FontManager
 from glumpy.graphics.collections import GlyphCollection
 from glumpy.graphics.collections import PathCollection, MarkerCollection
 
+def shiftdata(lon,arr):
+    ix = np.argmin(np.abs(lon-180), axis=1)
+    assert (len(set(ix)) == 1)
+    ix = ix[0]
+    slon = np.hstack((lon[:,ix:] - 360., lon[:,:ix]))
+    sarr = np.hstack((arr[:,ix:], arr[:,:ix]))
+    assert (slon.shape == lon.shape)
+    assert (sarr.shape == arr.shape)
+    return slon, sarr
+
 def read_wind_data(path):
     grbs = pygrib.open(path)
     grbs.seek(0)
     grb = grbs.readline()
-    lat, lon = grb.latlons()
-    U = np.flipud(grb.values)
+    lat0, lon0 = grb.latlons()
+    u0 = np.flipud(grb.values)
     grb = grbs.readline()
-    V = np.flipud(grb.values)
+    v0 = np.flipud(grb.values)
     grbs.close()
-    lat = np.flipud(lat)
-    return U / np.cos(np.pi*lat/180.), V
+    lat0 = np.flipud(lat0)
+    lon, lat = shiftdata(lon0,lat0)
+    u = shiftdata(lon0,u0)[1]
+    v = shiftdata(lon0,v0)[1]
+    return u, v
 
 def spheric_to_cartesian(phi, theta, rho):
     """ Spheric to cartesian coordinates """
@@ -184,8 +198,9 @@ varying float dist;
 vec4 to_cartesian(vec2 unit_pos) {
     float pi = 3.141592;
     vec2 latlon;
-    latlon.x = pi*(2*unit_pos.x - 1);
-    latlon.y = pi*(1 - unit_pos.y);
+    // lon from 0 to 2pi, lat from 0 to pi
+    latlon.x = 2*pi*unit_pos.x;
+    latlon.y = pi*unit_pos.y;
     float x = sin(latlon.x) * sin(latlon.y) * radius;
     float y = cos(latlon.x) * sin(latlon.y) * radius;
     float z = cos(latlon.y) * radius;
@@ -211,8 +226,6 @@ void main() {
     texcoord = vec2(mod(index.x, field_shape.x), floor(index.x / field_shape.x)) / field_shape;
     vec2 off = texture2D(offset, texcoord).xy;
     vec2 local = mod(texcoord + off, 1);
-    vec2 uv1, uv2, uv3, uv4;
-    vec2 dir1, dir2, dir3, dir4;
     for(int i=0; i < index.y; i+=1) {
         local = rk4(local, seg_len);
     }
@@ -234,7 +247,7 @@ varying float dist;
 
 void main() {
     float totlen = nseg * seg_len;
-    float phase = texture2D(offset, texcoord).b;
+    float phase = texture2D(offset, texcoord).b * 100;
     float alpha;
 
     // vary alpha along the length of the line to give the appearance of motion
@@ -249,27 +262,43 @@ void main() {
 
 u, v = read_wind_data("wind_data.grib")
 field = np.dstack((u,v)).astype('float32')
-rows, cols = (200, 2)
+
+def distribute_points(nx,ny):
+    x, y = np.meshgrid(np.arange(nx),np.arange(ny))
+    sx = (x + .5) / nx
+    sy = 1/np.pi * np.arcsin(2*((y+0.5)/ny-0.5)) + .5
+    return sx, sy
+
+rows, cols = (100, 100)
+p_x, p_y = distribute_points(rows, cols)
+print(p_x, p_y)
+vertex_indices = (rows * p_x + rows * cols * p_y).flatten()
+print(vertex_indices)
+
 segments = 20
 flow = gloo.Program(vertex, fragment)
 index = np.empty((rows * cols, segments * 2, 2), dtype=np.float32)
-index[:, :, 0] = np.arange(rows * cols)[:, np.newaxis]
+index[:, :, 0] = vertex_indices[:, np.newaxis]
 index[:, ::2, 1] = np.arange(segments)[np.newaxis, :]
 index[:, 1::2, 1] = np.arange(segments)[np.newaxis, :] + 1
 flow['index'] = index
 flow['field'] = field
 flow['field'].interpolation = gl.GL_LINEAR
+flow['field'].gpu_format = gl.GL_RG32F
+flow['field'].wrapping = gl.GL_MIRRORED_REPEAT
 flow['field_shape'] = (rows, cols)
-flow['offset'] = np.random.uniform(.01, size=(rows, cols, 3)).astype(np.float32)
+flow['offset'] = np.random.uniform(0,1E-2, size=(rows, cols, 3)).astype(np.float32)
 flow['speed'] = 0.01
-flow['color'] = np.array([[1,1,1,1]], dtype=np.float32)
-flow['seg_len'] = 0.001
+flow['color'] = np.reshape([1,0,0,1],(1,1,4)).astype(np.float32)
+flow['seg_len'] = 2E-4
 flow['nseg'] = segments
 flow['time'] = 0
-flow['radius'] = radius * 1.01
+flow['radius'] = radius * 1.02
 flow['transform'] = transform
 
-window = app.Window(width=1920*2, height=1080*2, color=(0,0,0,0), fullscreen=True, decoration=False)
+config = app.configuration.Configuration()
+config.samples = 2
+window = app.Window(width=1920*2, height=1080*2, color=(0,0,0,0.8), fullscreen=True, decoration=False, config=config)
 window.attach(transform)
 window.attach(viewport)
 
