@@ -1,8 +1,3 @@
-
-# -----------------------------------------------------------------------------
-# Copyright (c) 2009-2016 Nicolas P. Rougier. All rights reserved.
-# Distributed under the (new) BSD License.
-# -----------------------------------------------------------------------------
 import csv
 import numpy as np
 import pygrib
@@ -12,8 +7,8 @@ from glumpy import app, gl, glm, gloo, data
 from glumpy.geometry.primitives import sphere
 from glumpy.transforms import Rotate, Viewport, Position, Translate, Arcball
 from glumpy.graphics.text import FontManager
-from glumpy.graphics.collections import GlyphCollection
-from glumpy.graphics.collections import PathCollection, MarkerCollection
+from glumpy.graphics.collections import GlyphCollection, PathCollection, MarkerCollection
+from glumpy.app.movie import record
 
 def shiftdata(lon,arr):
     ix = np.argmin(np.abs(lon-180), axis=1)
@@ -42,7 +37,6 @@ def read_wind_data(path):
 
 def spheric_to_cartesian(phi, theta, rho):
     """ Spheric to cartesian coordinates """
-
     if   hasattr(phi, '__iter__'):   n = len(phi)
     elif hasattr(theta, '__iter__'): n = len(theta)
     elif hasattr(rho, '__iter__'):   n = len(rho)
@@ -52,7 +46,6 @@ def spheric_to_cartesian(phi, theta, rho):
     P[:,1] = sin_theta * np.cos(phi) * rho
     P[:,2] = np.cos(theta) * rho
     return P
-
 
 
 vertex = """
@@ -81,7 +74,7 @@ transform = Arcball(Position(),znear=1,zfar=10,aspect=1)
 viewport  = Viewport()
 
 radius = 1.5
-vertices, indices = sphere(radius, 128, 128)
+vertices, indices = sphere(radius, 32, 32)
 earth = gloo.Program(vertex, fragment)
 earth.bind(vertices)
 earth['texture'] = np.array(Image.open("bluemarble.jpg"))
@@ -100,8 +93,6 @@ for phi in np.linspace(0, np.pi, 12, endpoint=True):
 phi = np.linspace(0, 2*np.pi, 64, endpoint=True)
 for theta in np.linspace(0, np.pi, 19, endpoint=True)[1:-1]:
     paths.append(spheric_to_cartesian(phi, theta, radius*1.01), closed=True)
-
-
 
 vertex = """
 #include "math/constants.glsl"
@@ -125,8 +116,7 @@ void main (void)
     float scale = (3.5 - length(gl_Position.xyz)/length(vec3(1.5)));
     v_fg_color.a = scale;
     v_bg_color.a = scale;
-    scale=1;
-    v_size       = scale * size;
+    v_size       = size * scale;
     gl_PointSize = M_SQRT2 * size * scale + 2.0 * (linewidth + 1.5*antialias);
     <viewport.transform>;
 }
@@ -154,8 +144,6 @@ varying vec4  v_color;
 varying float v_offset;
 varying vec2  v_texcoord;
 
-// Main
-// ------------------------------------
 void main()
 {
     fetch_uniforms();
@@ -261,7 +249,7 @@ void main() {
 """
 
 u, v = read_wind_data("wind_data.grib")
-field = np.dstack((u,v)).astype('float32')
+field = np.dstack((u,v)).astype(np.float32)
 
 def distribute_points(nx,ny):
     x, y = np.meshgrid(np.arange(nx),np.arange(ny))
@@ -271,9 +259,7 @@ def distribute_points(nx,ny):
 
 rows, cols = (100, 100)
 p_x, p_y = distribute_points(rows, cols)
-print(p_x, p_y)
 vertex_indices = (rows * p_x + rows * cols * p_y).flatten()
-print(vertex_indices)
 
 segments = 20
 flow = gloo.Program(vertex, fragment)
@@ -287,9 +273,9 @@ flow['field'].interpolation = gl.GL_LINEAR
 flow['field'].gpu_format = gl.GL_RG32F
 flow['field'].wrapping = gl.GL_MIRRORED_REPEAT
 flow['field_shape'] = (rows, cols)
-flow['offset'] = np.random.uniform(0,1E-2, size=(rows, cols, 3)).astype(np.float32)
+flow['offset'] = np.random.uniform(0., 1E-2, size=(rows, cols, 3)).astype(np.float32)
 flow['speed'] = 0.01
-flow['color'] = np.reshape([1,0,0,1],(1,1,4)).astype(np.float32)
+flow['color'] = np.reshape([1,1,1,.5],(1,1,4)).astype(np.float32)
 flow['seg_len'] = 2E-4
 flow['nseg'] = segments
 flow['time'] = 0
@@ -298,7 +284,8 @@ flow['transform'] = transform
 
 config = app.configuration.Configuration()
 config.samples = 2
-window = app.Window(width=1920*2, height=1080*2, color=(0,0,0,0.8), fullscreen=True, decoration=False, config=config)
+window = app.Window(width=1920*2, height=1080*2, color=(0,0,0,0.8), fullscreen=True,
+                    decoration=False, config=config)
 window.attach(transform)
 window.attach(viewport)
 
@@ -308,13 +295,13 @@ def on_draw(dt):
     gl.glEnable(gl.GL_DEPTH_TEST)
     earth.draw(gl.GL_TRIANGLES, indices)
     transform.theta += .1
-    paths.draw()
+    #paths.draw()
     flow.draw(gl.GL_LINES, range(rows*cols))
     flow["time"] += 1
     gl.glDisable(gl.GL_DEPTH_TEST)
     gl.glEnable(gl.GL_BLEND)
-    markers.draw()
-    labels.draw()
+    #markers.draw()
+    #labels.draw()
 
 @window.event
 def on_init():
@@ -324,4 +311,7 @@ def on_init():
     transform.zoom = 30
     transform.distance = 8
 
-app.run()
+duration = 180.0
+framerate = 60
+with record(window, "earth2.mp4", fps=framerate):
+    app.run(framerate=framerate, duration=duration)
