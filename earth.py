@@ -1,9 +1,12 @@
 import csv
 import numpy as np
 import pygrib
+from netCDF4 import Dataset
+import matplotlib.pyplot as plt
+from scipy import interpolate
+#import cartopy.crs as ccrs
 from PIL import Image
 from glumpy import app, gl, glm, gloo, data
-#app.use("qt5")
 from glumpy.geometry.primitives import sphere
 from glumpy.transforms import Rotate, Viewport, Position, Translate, Arcball
 from glumpy.graphics.text import FontManager
@@ -11,14 +14,27 @@ from glumpy.graphics.collections import GlyphCollection, PathCollection, MarkerC
 from glumpy.app.movie import record
 
 def shiftdata(lon,arr):
-    ix = np.argmin(np.abs(lon-180), axis=1)
+    ix = np.argmin(np.abs(lon+180), axis=0)
     assert (len(set(ix)) == 1)
     ix = ix[0]
-    slon = np.hstack((lon[:,ix:] - 360., lon[:,:ix]))
-    sarr = np.hstack((arr[:,ix:], arr[:,:ix]))
-    assert (slon.shape == lon.shape)
-    assert (sarr.shape == arr.shape)
+    slon = np.vstack((lon[ix:,:], lon[:ix,:] + 360., lon[ix:ix+1,:] + 360.))
+    sarr = np.vstack((arr[ix:,:], arr[:ix,:], arr[ix:ix+1,:]))
     return slon, sarr
+
+def read_ocean_data(path):
+    with Dataset(path, "r") as f:
+        lon, lat, z, u, v = (f.variables[k][...] for k in ("xu", "yu", "zt", "u", "v"))
+    lon -= 360.
+    u[u == -1e18] = 0.
+    v[v == -1e18] = 0.
+    weights = np.gradient(z)[-10:, np.newaxis, np.newaxis]
+    weights /= weights.sum()
+    u_avg = np.sum((u[-1,-10:,...] * weights), axis=0).T
+    v_avg = np.sum((v[-1,-10:,...] * weights), axis=0).T
+    lon, lat = np.meshgrid(lon, lat, indexing="ij")
+    su, sv = (shiftdata(lon,x)[1] for x in (u_avg, v_avg))
+    slon, slat = shiftdata(lon, lat)
+    return slon, slat, su / abs(su).max(), sv / abs(sv).max()
 
 def read_wind_data(path):
     grbs = pygrib.open(path)
@@ -74,12 +90,29 @@ transform = Arcball(Position(),znear=1,zfar=10,aspect=1)
 viewport  = Viewport()
 
 radius = 1.5
-vertices, indices = sphere(radius, 32, 32)
+earth_vertices, earth_indices = sphere(radius, 32, 32)
 earth = gloo.Program(vertex, fragment)
-earth.bind(vertices)
+earth.bind(earth_vertices)
 earth['texture'] = np.array(Image.open("bluemarble.jpg"))
-earth['texture'].interpolation = gl.GL_LINEAR
+earth['texture'].interpolation = gl.GL_NEAREST
 earth['transform'] = transform
+
+
+x, y, u, v = read_ocean_data("veros-velocities.nc")
+
+lat, lon = np.mgrid[-90:90:500j,-180:180:500j]
+u_interp = interpolate.griddata((x.flatten(), y.flatten()), u.flatten(), (lon, lat), method="linear", fill_value=0.)
+v_interp = interpolate.griddata((x.flatten(), y.flatten()), v.flatten(), (lon, lat), method="linear", fill_value=0.)
+speed = np.flipud(np.sqrt(u_interp**2 + v_interp**2))
+
+overlay_vertices, overlay_indices = sphere(radius * 1.01, 52, 52)
+overlay = gloo.Program(vertex, fragment)
+overlay.bind(overlay_vertices)
+colors = plt.get_cmap("viridis")(speed / speed.max())
+colors[..., 3] = 0.5 * (1 + speed / speed.max())
+overlay['texture'] = colors
+overlay['texture'].interpolation = gl.GL_LINEAR
+overlay['transform'] = transform
 
 paths = PathCollection(mode="agg+", color="global", linewidth="global",
                        viewport=viewport, transform=transform)
@@ -248,8 +281,7 @@ void main() {
 }
 """
 
-u, v = read_wind_data("wind_data.grib")
-field = np.dstack((u,v)).astype(np.float32)
+field = np.dstack((u_interp,v_interp)).astype(np.float32)
 
 def distribute_points(nx,ny):
     x, y = np.meshgrid(np.arange(nx),np.arange(ny))
@@ -257,14 +289,15 @@ def distribute_points(nx,ny):
     sy = 1/np.pi * np.arcsin(2*((y+0.5)/ny-0.5)) + .5
     return sx, sy
 
-rows, cols = (100, 100)
+rows, cols = (200, 200)
 p_x, p_y = distribute_points(rows, cols)
-vertex_indices = (rows * p_x + rows * cols * p_y).flatten()
+flow_indices = (rows * p_x + rows * cols * p_y).flatten()
 
-segments = 20
+segments = 40
 flow = gloo.Program(vertex, fragment)
+#flow.bind(flow_vertices)
 index = np.empty((rows * cols, segments * 2, 2), dtype=np.float32)
-index[:, :, 0] = vertex_indices[:, np.newaxis]
+index[:, :, 0] = flow_indices[:, np.newaxis]
 index[:, ::2, 1] = np.arange(segments)[np.newaxis, :]
 index[:, 1::2, 1] = np.arange(segments)[np.newaxis, :] + 1
 flow['index'] = index
@@ -276,7 +309,7 @@ flow['field_shape'] = (rows, cols)
 flow['offset'] = np.random.uniform(0., 1E-2, size=(rows, cols, 3)).astype(np.float32)
 flow['speed'] = 0.01
 flow['color'] = np.reshape([1,1,1,.5],(1,1,4)).astype(np.float32)
-flow['seg_len'] = 2E-4
+flow['seg_len'] = 1E-2
 flow['nseg'] = segments
 flow['time'] = 0
 flow['radius'] = radius * 1.02
@@ -292,14 +325,15 @@ window.attach(viewport)
 @window.event
 def on_draw(dt):
     window.clear()
-    gl.glEnable(gl.GL_DEPTH_TEST)
-    earth.draw(gl.GL_TRIANGLES, indices)
-    transform.theta += .1
-    #paths.draw()
-    flow.draw(gl.GL_LINES, range(rows*cols))
+    #gl.glEnable(gl.GL_DEPTH_TEST)
+    earth.draw(gl.GL_TRIANGLES, earth_indices)
+    #transform.theta += .1
+    overlay.draw(gl.GL_TRIANGLES, overlay_indices)
+    paths.draw()
+    flow.draw(gl.GL_LINES, flow_indices)
     flow["time"] += 1
-    gl.glDisable(gl.GL_DEPTH_TEST)
-    gl.glEnable(gl.GL_BLEND)
+    #gl.glDisable(gl.GL_DEPTH_TEST)
+    #gl.glEnable(gl.GL_BLEND)
     #markers.draw()
     #labels.draw()
 
@@ -313,5 +347,5 @@ def on_init():
 
 duration = 180.0
 framerate = 60
-with record(window, "earth2.mp4", fps=framerate):
-    app.run(framerate=framerate, duration=duration)
+#with record(window, "earth2.mp4", fps=framerate):
+app.run(framerate=framerate, duration=duration)
