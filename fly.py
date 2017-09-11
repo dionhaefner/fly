@@ -1,3 +1,14 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+~~Pretty fly for a .py-file~~
+
+Fly, a flow visualizer in Python. By Dion Häfner (mail@dionhaefner.de).
+
+Find me on GitHub: https://github.com/dionhaefner/fly
+"""
+
 import time
 import sys
 
@@ -5,18 +16,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 
-from glumpy import app, gl, glm, gloo, data
+from glumpy import app, gl, gloo
 from glumpy.geometry.primitives import sphere
 from glumpy.transforms import Rotate, Viewport, Position, Translate, Arcball
 from glumpy.graphics.text import FontManager
 from glumpy.graphics.collections import GlyphCollection, PathCollection, MarkerCollection
 from glumpy.app import movie
 
-"""
-Pretty fly for a .py-file
-"""
 
 class Fly:
+    """Main class. Used to set up an interactive flow visualization and run it.
+
+    Settings are attributes of this class. The scalar and/or vector fields
+    to be visualized are passed to the __init__ constructor.
+
+    Supports showing:
+    - scalar fields (shading),
+    - vector fields (flow lines),
+    - background images,
+    - makers / labels
+    on an interactive, zoomable sphere.
+
+    Example:
+      >>> fly = Fly(scalar_field=temperature, flow_field=velocity)
+      >>> fly.rotate = True
+      >>> fly.setup()
+      >>> fly.run()
+
+    """
     #
     # Settings
     #
@@ -65,21 +92,21 @@ class Fly:
     _framerate = 60
 
 
-    def __init__(self, shading_field, flow_field):
+    def __init__(self, shading_field=None, flow_field=None):
         self._setup_done = False
 
         if flow_field is not None:
             flow_field = np.asarray(flow_field)
             if flow_field.ndim != 3 or flow_field.shape[0] != 2:
                 raise ValueError("flow_field must be of shape (2, nx, ny)")
-        self.flow_field = flow_field / flow_field.max()
+        self.flow_field = flow_field / np.nanmax(flow_field)
 
         if shading_field is not None:
             shading_field = np.asarray(shading_field)
             if shading_field.ndim != 2:
                 raise ValueError("shading_field must be two-dimensional")
-        shading_field -= shading_field.min()
-        shading_field /= shading_field.max()
+        shading_field -= np.nanmin(shading_field)
+        shading_field /= np.nanmax(shading_field)
         self.shading_field = shading_field
 
 
@@ -124,7 +151,7 @@ class Fly:
             self._overlay = gloo.Program(ImageShader.vertex, ImageShader.fragment)
             self._overlay.bind(overlay_vertices)
             colors = plt.get_cmap(self.colormap)(flipped_field)
-            colors[..., 3] = 0.5 * (1 + flipped_field)
+            colors[..., 3] = 0.7 + 0.3 * flipped_field
             self._overlay["texture"] = colors
             self._overlay["texture"].interpolation = gl.GL_LINEAR
             self._overlay["transform"] = self._transform
@@ -149,17 +176,22 @@ class Fly:
             self._paths = Dummy()
 
         if self.markers is not None:
-            self._markers = MarkerCollection(marker="disc", vertex=MarkerShader.vertex,
-                                             viewport = self._viewport, transform=transform)
+            self._markers = MarkerCollection(marker="disc",
+                                             vertex=MarkerShader.vertex,
+                                             viewport=self._viewport,
+                                             transform=self._transform)
             labels, latitudes, longitudes = self.markers
-            points = self.spheric_to_cartesian(longitudes, latitudes, self._radius * 1.01)
+            points = self.spheric_to_cartesian(np.pi + np.pi / 180. * np.asarray(longitudes),
+                                               np.pi / 2 + np.pi / 180. * np.asarray(latitudes),
+                                               self._radius * 1.01)
             self._markers.append(points, bg_color=(1,1,1,1), fg_color=(.25,.25,.25,1), size=10)
 
             self._labels = GlyphCollection("agg", vertex=GlyphShader.vertex,
-                                     transform=transform, viewport=self._viewport)
+                                           transform=self._transform,
+                                           viewport=self._viewport)
             font = FontManager.get("OpenSans-Regular.ttf", size=16, mode="agg")
-            for i in range(len(P)):
-                self._labels.append(C[i], font, origin = P[i], color=(1,1,1,1))
+            for label, p in zip(labels, points):
+                self._labels.append(label, font, origin=p, color=(1,1,1,1))
             self._labels["position"][:,1] -= 20
         else:
             self._markers = Dummy()
