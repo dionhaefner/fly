@@ -34,6 +34,7 @@ pip3 install -r requirements.txt --user
 
 to install all dependencies. Alternatively, you should at least install the following packages:
 
+- pillow
 - NumPy
 - SciPy
 - Matplotlib
