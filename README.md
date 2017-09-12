@@ -1,13 +1,13 @@
 # Fly
 An interactive geophysical flow visualizer for Python.
 
-[![fly in action](vimeo.png "fly in action")](https://vimeo.com/233482456)
-
-[See fly in action on Vimeo](https://vimeo.com/233482456)
-
 **fly** provides an easy way to visualize both scalar and vector fields in real,
 interactive, 3-D spherical coordinates. Since it is written in Python, you can do all data processing as
 you are used to, and just pass your data to fly as NumPy arrays. And thanks to Glumpy's powerful rendering capacities, fly makes full use of your GPU to give you that FPS goodness.
+
+[![fly in action](vimeo.png "fly in action")](https://vimeo.com/233482456)
+
+[See fly in action on Vimeo](https://vimeo.com/233482456)
 
 ## But why?
 Geophysicists usually visualize data as static two-dimensional plots on maps.
