@@ -1,7 +1,7 @@
 # Fly
 An interactive geophysical flow visualizer for Python.
 
-[![fly in action](https://media.giphy.com/media/mr5lcX5PUDOHC/giphy.gif "fly in action")](https://vimeo.com/233482456)
+[![fly in action](vimeo.png "fly in action")](https://vimeo.com/233482456)
 
 [See fly in action on Vimeo](https://vimeo.com/233482456)
 
